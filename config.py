@@ -27,11 +27,6 @@ class DanceAnalysisConfig:
     
     # Keypoint definitions
     KEYPOINTS = {
-        "nose": "nose",
-        "left_eye": "left_eye", 
-        "right_eye": "right_eye",
-        "left_ear": "left_ear",
-        "right_ear": "right_ear",
         "left_shoulder": "left_shoulder",
         "right_shoulder": "right_shoulder",
         "left_elbow": "left_elbow",
@@ -82,6 +77,18 @@ class DanceAnalysisConfig:
                 "Lift your right arm slightly higher",
                 "Bring your right arm up more",
                 "Extend your right arm upward"
+            ],
+            "straighten": [
+                "Straighten your right arm more",
+                "Extend your right arm fully",
+                "Unbend your right arm",
+                "Make your right arm straighter"
+            ],
+            "bend": [
+                "Bend your right arm more",
+                "Flex your right arm",
+                "Bend your elbow more",
+                "Make your right arm more bent"
             ]
         },
         "left_arm": {
@@ -96,6 +103,18 @@ class DanceAnalysisConfig:
                 "Lift your left arm slightly higher",
                 "Bring your left arm up more",
                 "Extend your left arm upward"
+            ],
+            "straighten": [
+                "Straighten your left arm more",
+                "Extend your left arm fully",
+                "Unbend your left arm",
+                "Make your left arm straighter"
+            ],
+            "bend": [
+                "Bend your left arm more",
+                "Flex your left arm",
+                "Bend your elbow more",
+                "Make your left arm more bent"
             ]
         },
         "right_leg": {
@@ -155,6 +174,11 @@ class DanceAnalysisConfig:
             ]
         }
     }
+    
+    # Arm straightness thresholds
+    STRAIGHT_THRESHOLD = 160.0  # Consider "straight" if > 160°
+    BENT_THRESHOLD = 140.0      # Consider "bent" if < 140°
+    PERFECT_STRAIGHT = 180.0    # Perfectly straight arm
     
     @classmethod
     def get_difficulty_config(cls, difficulty: str) -> Dict:

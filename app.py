@@ -43,7 +43,7 @@ async def compare_poses(pose_data: PoseData, difficulty: str = "intermediate"):
     2. Applies difficulty level specific configuration
     3. Compares all frames between reference and user performances
     4. Identifies the top 3 most problematic keyframes
-    5. Returns detailed analysis with humanized suggestions
+    5. Returns detailed analysis with humanized suggestions including straighten/bend logic
     
     Args:
         pose_data: PoseData object containing original and user pose dictionaries
@@ -63,28 +63,16 @@ async def compare_poses(pose_data: PoseData, difficulty: str = "intermediate"):
                 detail="Invalid pose data: missing required keypoints for analysis"
             )
         
-        # Apply difficulty level configuration
+        # Get difficulty configuration for logging
         from config import config
         difficulty_config = config.get_difficulty_config(difficulty)
         
-        # Temporarily update configuration for this request
-        original_threshold = config.ANGLE_THRESHOLD
-        config.update_threshold(difficulty_config['angle_threshold'])
-        
-        # Update the compare module's threshold
-        import compare
-        compare.ANGLE_THRESHOLD = difficulty_config['angle_threshold']
-        
-        # Perform pose comparison
-        results = compare_all_frames(pose_data)
+        # Perform pose comparison with difficulty level
+        results = compare_all_frames(pose_data, difficulty)
         
         # Generate summary for logging/debugging
         summary = get_analysis_summary(results)
         print(f"Analysis completed for {difficulty} level: {summary}")
-        
-        # Restore original configuration
-        config.update_threshold(original_threshold)
-        compare.ANGLE_THRESHOLD = original_threshold
         
         return results
         
@@ -126,48 +114,56 @@ async def health_check():
 
 # Example usage endpoint for testing
 @app.post("/test-comparison")
-async def test_comparison():
+async def test_comparison(difficulty: str = "intermediate"):
     """
     Test endpoint with sample pose data.
     
-    This endpoint provides example pose data for testing the comparison functionality.
+    This endpoint provides example pose data for testing the comparison functionality,
+    including the new straighten/bend arm logic.
+    
+    Args:
+        difficulty: Difficulty level to test with (beginner, intermediate, advanced)
     """
-    # Sample pose data for testing
+    # Sample pose data for testing with arm straightness scenarios
     sample_pose_data = PoseData(
         original={
             "frame_1": {
                 "right_shoulder": (100.0, 100.0),
                 "right_elbow": (120.0, 80.0),
-                "right_wrist": (140.0, 60.0),
+                "right_wrist": (140.0, 60.0),  # Straight arm (~180°)
+                "left_shoulder": (80.0, 100.0),
+                "left_elbow": (70.0, 120.0),
+                "left_wrist": (60.0, 140.0),   # Bent arm (~90°)
                 "left_hip": (80.0, 150.0),
                 "left_knee": (90.0, 200.0),
-                "left_ankle": (100.0, 250.0),
-                "left_ear": (95.0, 90.0),
-                "left_eye": (100.0, 85.0)
+                "left_ankle": (100.0, 250.0)
             }
         },
         user={
             "frame_1": {
                 "right_shoulder": (100.0, 100.0),
-                "right_elbow": (125.0, 75.0),  # Different angle
-                "right_wrist": (150.0, 50.0),  # Different angle
+                "right_elbow": (125.0, 75.0),  # Bent arm (should be straight)
+                "right_wrist": (150.0, 50.0),  # Bent arm (should be straight)
+                "left_shoulder": (80.0, 100.0),
+                "left_elbow": (90.0, 110.0),   # Straight arm (should be bent)
+                "left_wrist": (100.0, 120.0),  # Straight arm (should be bent)
                 "left_hip": (80.0, 150.0),
                 "left_knee": (85.0, 210.0),    # Different angle
-                "left_ankle": (95.0, 260.0),   # Different angle
-                "left_ear": (90.0, 85.0),      # Different angle
-                "left_eye": (95.0, 80.0)       # Different angle
+                "left_ankle": (95.0, 260.0)    # Different angle
             }
         }
     )
     
     try:
-        results = compare_all_frames(sample_pose_data)
+        results = compare_all_frames(sample_pose_data, difficulty)
         summary = get_analysis_summary(results)
         
         return {
             "test_data": sample_pose_data,
+            "difficulty": difficulty,
             "results": results,
-            "summary": summary
+            "summary": summary,
+            "note": "This test demonstrates straighten/bend arm logic - right arm should be straightened, left arm should be bent"
         }
         
     except Exception as e:

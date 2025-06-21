@@ -33,11 +33,10 @@ dance_analysis_backend/
 - **Hip Hop**: Lenient 12° threshold, emphasizes torso and leg movement
 
 ### 🔧 Expanded Joint Analysis
-- **8 joint configurations** analyzed simultaneously
+- **6 joint configurations** analyzed simultaneously
 - **Arms**: Right and left arm angles (shoulder → elbow → wrist)
 - **Legs**: Right and left leg angles (hip → knee → ankle)
 - **Torso**: Body alignment (shoulder → hip → knee)
-- **Head**: Tilt analysis (ear → eye → shoulder)
 
 ### ⚙️ Configuration Management
 - Centralized configuration system
@@ -114,16 +113,14 @@ Generates human-readable suggestions for correcting joint angle differences.
 
 ## Joint Definitions
 
-The module analyzes eight key joint configurations:
+The module analyzes six key joint configurations:
 
 1. **Right Arm**: `right_shoulder` → `right_elbow` → `right_wrist`
 2. **Left Arm**: `left_shoulder` → `left_elbow` → `left_wrist`
 3. **Right Leg**: `right_hip` → `right_knee` → `right_ankle`
 4. **Left Leg**: `left_hip` → `left_knee` → `left_ankle`
-5. **Head Tilt**: `left_ear` → `left_eye` → `left_shoulder`
-6. **Head Tilt Alt**: `right_ear` → `right_eye` → `right_shoulder`
-7. **Torso**: `left_shoulder` → `left_hip` → `left_knee`
-8. **Torso Alt**: `right_shoulder` → `right_hip` → `right_knee`
+5. **Torso**: `left_shoulder` → `left_hip` → `left_knee`
+6. **Torso Alt**: `right_shoulder` → `right_hip` → `right_knee`
 
 ## Configuration
 

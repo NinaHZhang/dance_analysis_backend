@@ -286,27 +286,16 @@ def process_pose_file(file_path: str, difficulty: str = "intermediate") -> Dict:
 
 
 def run_analysis(pose_data: PoseData, difficulty: str = "intermediate") -> Dict:
-    """Run dance analysis on pose data."""
+    """Run dance analysis on pose data with difficulty-based thresholds."""
     print(f"🎭 Analyzing with {difficulty} difficulty...")
     
     # Get difficulty configuration
     difficulty_config = config.get_difficulty_config(difficulty)
     print(f"⚙️  Using threshold: {difficulty_config['angle_threshold']}°")
     
-    # Temporarily update configuration
-    original_threshold = config.ANGLE_THRESHOLD
-    config.update_threshold(difficulty_config['angle_threshold'])
-    
-    import compare
-    compare.ANGLE_THRESHOLD = difficulty_config['angle_threshold']
-    
-    # Run analysis
-    results = compare_all_frames(pose_data)
+    # Run analysis with difficulty level
+    results = compare_all_frames(pose_data, difficulty)
     summary = get_analysis_summary(results)
-    
-    # Restore configuration
-    config.update_threshold(original_threshold)
-    compare.ANGLE_THRESHOLD = original_threshold
     
     # Format results
     analysis_results = {

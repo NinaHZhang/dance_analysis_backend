@@ -14,7 +14,6 @@ Joint Definitions:
     - left_arm: Shoulder -> Elbow -> Wrist
     - right_leg: Hip -> Knee -> Ankle  
     - left_leg: Hip -> Knee -> Ankle
-    - head_tilt: Ear -> Eye -> Shoulder (for head orientation)
     - torso: Shoulder -> Hip -> Knee (for body alignment)
 """
 
@@ -117,20 +116,33 @@ def generate_suggestion(joint: str, delta: float) -> str:
 
 def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]], 
                        user_pose: Dict[str, Tuple[float, float]], 
-                       frame_id: str) -> Optional[FrameComparisonResult]:
+                       frame_id: str,
+                       difficulty_level: str = "beginner") -> Optional[FrameComparisonResult]:
     """
-    Compare poses for a single frame and calculate joint differences.
+    Compare poses for a single frame and calculate joint differences with straighten/bend logic.
     
     Args:
         original_pose: Reference pose keypoints
         user_pose: User pose keypoints
         frame_id: Identifier for the frame
+        difficulty_level: Difficulty level for threshold adjustment
         
     Returns:
         FrameComparisonResult if valid comparison can be made, None otherwise
     """
+    import random
+    from config import config
+    
     joint_issues = []
     total_error = 0.0
+    
+    # Get difficulty-based threshold
+    difficulty_config = config.get_difficulty_config(difficulty_level)
+    threshold = difficulty_config["angle_threshold"]
+    
+    # Get arm straightness thresholds
+    straight_threshold = config.STRAIGHT_THRESHOLD
+    bent_threshold = config.BENT_THRESHOLD
     
     # Calculate angles for each joint configuration
     for joint_name, keypoints in JOINT_CONFIGS.items():
@@ -145,8 +157,12 @@ def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]],
         delta_angle = user_angle - original_angle
         
         # Only include if difference exceeds threshold
-        if abs(delta_angle) > ANGLE_THRESHOLD:
-            suggestion = generate_suggestion(joint_name, delta_angle)
+        if abs(delta_angle) > threshold:
+            # Generate humanized suggestion with straighten/bend logic
+            suggestion = _generate_humanized_suggestion_with_straighten_bend(
+                joint_name, original_angle, user_angle, delta_angle, difficulty_level
+            )
+            
             joint_issue = JointIssue(
                 joint=joint_name,
                 delta_angle=delta_angle,
@@ -168,18 +184,74 @@ def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]],
     return None
 
 
-def compare_all_frames(pose_data: PoseData) -> List[FrameComparisonResult]:
+def _generate_humanized_suggestion_with_straighten_bend(joint_name, ref_angle, user_angle, difference, difficulty_level):
+    """
+    Generate humanized suggestions based on angle differences, including straighten/bend logic.
+    """
+    import random
+    from config import config
+    
+    templates = config.SUGGESTION_TEMPLATES
+    straight_threshold = config.STRAIGHT_THRESHOLD
+    bent_threshold = config.BENT_THRESHOLD
+    
+    # Determine if this is an arm joint
+    is_arm = joint_name in ["right_arm", "left_arm"]
+    
+    if is_arm:
+        # Check if reference pose expects a straight arm
+        ref_is_straight = ref_angle > straight_threshold
+        user_is_straight = user_angle > straight_threshold
+        
+        # Check if reference pose expects a bent arm
+        ref_is_bent = ref_angle < bent_threshold
+        user_is_bent = user_angle < bent_threshold
+        
+        # Case 1: Reference expects straight arm, user has bent arm
+        if ref_is_straight and not user_is_straight:
+            if joint_name in templates and "straighten" in templates[joint_name]:
+                return random.choice(templates[joint_name]["straighten"])
+        
+        # Case 2: Reference expects bent arm, user has straight arm
+        elif ref_is_bent and not user_is_bent:
+            if joint_name in templates and "bend" in templates[joint_name]:
+                return random.choice(templates[joint_name]["bend"])
+        
+        # Case 3: Both are straight or both are bent, but angles differ
+        elif (ref_is_straight and user_is_straight) or (ref_is_bent and user_is_bent):
+            # Use regular positive/negative logic
+            if user_angle < ref_angle:
+                if joint_name in templates and "positive" in templates[joint_name]:
+                    return random.choice(templates[joint_name]["positive"])
+            else:
+                if joint_name in templates and "negative" in templates[joint_name]:
+                    return random.choice(templates[joint_name]["negative"])
+    
+    # For non-arm joints or when straight/bend logic doesn't apply
+    if joint_name in templates:
+        if user_angle < ref_angle:
+            if "positive" in templates[joint_name]:
+                return random.choice(templates[joint_name]["positive"])
+        else:
+            if "negative" in templates[joint_name]:
+                return random.choice(templates[joint_name]["negative"])
+    
+    return None
+
+
+def compare_all_frames(pose_data: PoseData, difficulty_level: str = "beginner") -> List[FrameComparisonResult]:
     """
     Compare all frames between reference and user poses, selecting the top N problematic frames.
     
     This is the main function that:
     1. Compares each frame between reference and user poses
     2. Calculates joint angle differences for arms, legs, and head
-    3. Identifies frames with significant pose errors (>10° threshold)
-    4. Ranks frames by total error and returns top 3
+    3. Identifies frames with significant pose errors (threshold based on difficulty)
+    4. Ranks frames by total error and returns top N
     
     Args:
         pose_data: PoseData object containing original and user pose dictionaries
+        difficulty_level: Difficulty level for threshold adjustment ("beginner", "intermediate", "advanced")
         
     Returns:
         List of FrameComparisonResult objects for the top N problematic frames,
@@ -190,7 +262,7 @@ def compare_all_frames(pose_data: PoseData) -> List[FrameComparisonResult]:
         ...     original={"frame_1": {"right_shoulder": (100, 100), ...}},
         ...     user={"frame_1": {"right_shoulder": (105, 95), ...}}
         ... )
-        >>> results = compare_all_frames(pose_data)
+        >>> results = compare_all_frames(pose_data, "intermediate")
         >>> print(f"Found {len(results)} problematic frames")
     """
     frame_results = []
@@ -206,7 +278,7 @@ def compare_all_frames(pose_data: PoseData) -> List[FrameComparisonResult]:
         original_pose = pose_data.original[frame_id]
         user_pose = pose_data.user[frame_id]
         
-        result = compare_frame_poses(original_pose, user_pose, frame_id)
+        result = compare_frame_poses(original_pose, user_pose, frame_id, difficulty_level)
         if result:
             frame_results.append(result)
     
