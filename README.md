@@ -27,10 +27,18 @@ dance_analysis_backend/
 
 ## Key Features
 
-### 🎭 Dance Style Support
-- **Ballet**: Strict 8° threshold, focuses on arm and leg precision
-- **Contemporary**: Standard 10° threshold, balanced analysis
-- **Hip Hop**: Lenient 12° threshold, emphasizes torso and leg movement
+### 🎭 Strictness Support
+- 1. Beginner (More Forgiving)
+   Great for beginners - only flags major differences
+   Threshold: 15.0°
+
+2. Intermediate (Balanced)
+   Balanced analysis for most dancers
+   Threshold: 10.0°
+
+3. Advanced (Precise)
+   For advanced dancers - catches subtle differences
+   Threshold: 6.0°
 
 ### 🔧 Expanded Joint Analysis
 - **8 joint configurations** analyzed simultaneously
