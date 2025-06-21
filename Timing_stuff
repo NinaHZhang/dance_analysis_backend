@@ -1,15 +1,13 @@
-#Timing and Offset (Optional Use)
-
 import json
 import numpy as np
 
 def load_joints_from_json(json_str):
-    """Load model and user joints from JSON into 3D numpy arrays with frame names"""
+    """Load original and user joints from JSON into 3D numpy arrays with frame names"""
     data = json.loads(json_str)
     joints = {}
     frame_names = {}
     
-    for dancer_type in ['model', 'user']:
+    for dancer_type in ['original', 'user']:
         frames = sorted(data[dancer_type].keys(), key=lambda x: int(x.split('_')[1]))
         joint_names = sorted(data[dancer_type][frames[0]].keys())
         
@@ -24,26 +22,26 @@ def load_joints_from_json(json_str):
         joints[dancer_type] = joint_array
         frame_names[dancer_type] = frames  # Store frame names for each type
     
-    return joints['model'], joints['user'], frame_names
+    return joints['original'], joints['user'], frame_names
 
 # Load data from JSON file
 with open('dance.json') as f:
     json_data = f.read()
 
-model_joints, user_joints, frame_names = load_joints_from_json(json_data)
+original_joints, user_joints, frame_names = load_joints_from_json(json_data)
 
 # 1. Parameters
-fps = 1
+fps = 2
 dt = 1/fps
 threshold = 1  # Velocity norm threshold for key poses
 
 # 2. Compute derivatives using ONLY x,y coordinates
-model_velocity = np.gradient(model_joints[:, :, :2], dt, axis=0)
+original_velocity = np.gradient(original_joints[:, :, :2], dt, axis=0)
 user_velocity = np.gradient(user_joints[:, :, :2], dt, axis=0)
 
 # 3. Detect key poses (minima in velocity magnitude)
-model_velocity_norm = np.linalg.norm(model_velocity, axis=2)
-frame_motion_level = np.mean(model_velocity_norm, axis=1)
+original_velocity_norm = np.linalg.norm(original_velocity, axis=2)
+frame_motion_level = np.mean(original_velocity_norm, axis=1)
 
 key_pose_indices = []
 for t in range(1, len(frame_motion_level)-1):
@@ -57,10 +55,10 @@ for k in range(len(key_pose_indices)-1):
     t_start = key_pose_indices[k]
     t_end = key_pose_indices[k+1]
     
-    # Get model frame names for this segment
-    model_start_frame = frame_names['model'][t_start]
-    model_end_frame = frame_names['model'][t_end-1]  # -1 because end is exclusive
-    model_frames = f"{model_start_frame} to {model_end_frame}"
+    # Get original frame names for this segment
+    original_start_frame = frame_names['original'][t_start]
+    original_end_frame = frame_names['original'][t_end-1]  # -1 because end is exclusive
+    original_frames = f"{original_start_frame} to {original_end_frame}"
     
     # Sliding window alignment
     window = 5
@@ -74,17 +72,17 @@ for k in range(len(key_pose_indices)-1):
         seg_length = min(t_end - t_start, user_end_idx - user_start_idx)
         if seg_length <= 0: continue
         
-        model_seg = model_joints[t_start:t_start+seg_length, :, :2]
+        original_seg = original_joints[t_start:t_start+seg_length, :, :2]
         user_seg = user_joints[user_start_idx:user_start_idx+seg_length, :, :2]
         
-        model_flat = model_seg.reshape(seg_length, -1)
+        original_flat = original_seg.reshape(seg_length, -1)
         user_flat = user_seg.reshape(seg_length, -1)
         
-        dot_product = np.sum(model_flat * user_flat, axis=1)
-        model_mag = np.linalg.norm(model_flat, axis=1)
+        dot_product = np.sum(original_flat * user_flat, axis=1)
+        original_mag = np.linalg.norm(original_flat, axis=1)
         user_mag = np.linalg.norm(user_flat, axis=1)
         with np.errstate(divide='ignore', invalid='ignore'):
-            similarities = dot_product / (model_mag * user_mag)
+            similarities = dot_product / (original_mag * user_mag)
         seg_sim = np.nanmean(similarities)
         
         if seg_sim > best_sim:
@@ -102,14 +100,14 @@ for k in range(len(key_pose_indices)-1):
     
     # Calculate position error
     aligned_user = user_joints[aligned_user_start_idx:aligned_user_end_idx, :, :2]
-    model_segment = model_joints[t_start:t_end, :, :2]
-    min_length = min(len(aligned_user), len(model_segment))
+    original_segment = original_joints[t_start:t_end, :, :2]
+    min_length = min(len(aligned_user), len(original_segment))
     if min_length == 0:
         continue
     
     aligned_user = aligned_user[:min_length]
-    model_segment = model_segment[:min_length]
-    pos_diff = np.linalg.norm(aligned_user - model_segment, axis=2)
+    original_segment = original_segment[:min_length]
+    pos_diff = np.linalg.norm(aligned_user - original_segment, axis=2)
     pos_error = np.mean(pos_diff)
     
     # Generate feedback with frame references
@@ -124,5 +122,5 @@ for k in range(len(key_pose_indices)-1):
         timing_feedback = f"Segment {k}: On time (User frames: {user_frames})"
     
     print(timing_feedback)
-    print(f"  Compared to model frames: {model_frames}")
+    print(f"  Compared to original frames: {original_frames}")
     print(f"  Position error: {pos_error:.3f} units (avg per joint)\n")
