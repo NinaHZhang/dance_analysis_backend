@@ -1,0 +1,218 @@
+import json
+import numpy as np
+import pandas as pd
+
+class DanceTimingAnalyzer:
+    def __init__(self, json_path, fps=30, window_radius_sec=0.5, analysis_interval_sec=0.2,
+                 pose_weight=0.7, velocity_weight=0.3):
+        self.json_path = json_path
+        self.fps = fps
+        self.window_radius_frames = int(window_radius_sec * fps)
+        self.analysis_interval_sec = analysis_interval_sec
+        self.pose_weight = pose_weight
+        self.velocity_weight = velocity_weight
+        self.results = []
+        
+    def load_data(self):
+        with open(self.json_path) as f:
+            data = json.load(f)
+        
+        # Extract and sort frames numerically
+        self.original_frames = sorted(data['original'].keys(), key=lambda x: int(x.split('_')[1]))
+        self.user_frames = sorted(data['user'].keys(), key=lambda x: int(x.split('_')[1]))
+        
+        # Get joint names
+        joint_names = sorted(data['original'][self.original_frames[0]].keys())
+        
+        # Create joint arrays (x,y only)
+        self.original_joints = np.array([
+            [data['original'][f][j][:2] for j in joint_names] 
+            for f in self.original_frames
+        ])
+        self.user_joints = np.array([
+            [data['user'][f][j][:2] for j in joint_names] 
+            for f in self.user_frames
+        ])
+        
+        # Find midpoint shoulder index
+        self.midpoint_shoulder_idx = self._get_midpoint_shoulder_index(joint_names)
+        
+        # Adjust coordinates relative to midpoint shoulder
+        self._normalize_coordinates()
+        
+        # Precompute velocities
+        self.original_velocity = self._compute_velocity(self.original_joints)
+        self.user_velocity = self._compute_velocity(self.user_joints)
+        
+    def _get_midpoint_shoulder_index(self, joint_names):
+        """Find or compute the midpoint shoulder reference point"""
+        # First try to find explicit midpoint_shoulder
+        if 'midpoint_shoulder' in joint_names:
+            return joint_names.index('midpoint_shoulder')
+            
+        # Otherwise compute from left/right shoulders
+        left_idx = joint_names.index('left_shoulder') if 'left_shoulder' in joint_names else None
+        right_idx = joint_names.index('right_shoulder') if 'right_shoulder' in joint_names else None
+        
+        if left_idx is not None and right_idx is not None:
+            # We'll compute midpoint dynamically later
+            return (left_idx, right_idx)
+            
+        # If no shoulders found, use first joint as fallback
+        return 0
+    
+    def _normalize_coordinates(self):
+        """Adjust coordinates relative to midpoint shoulder"""
+        # For original joints
+        if isinstance(self.midpoint_shoulder_idx, tuple):
+            # Compute midpoint from left/right shoulders
+            left_idx, right_idx = self.midpoint_shoulder_idx
+            midpoints = (self.original_joints[:, left_idx] + self.original_joints[:, right_idx]) / 2
+            self.original_joints -= midpoints[:, np.newaxis, :]
+            
+            midpoints = (self.user_joints[:, left_idx] + self.user_joints[:, right_idx]) / 2
+            self.user_joints -= midpoints[:, np.newaxis, :]
+        else:
+            # Use explicit midpoint shoulder
+            midpoints = self.original_joints[:, self.midpoint_shoulder_idx]
+            self.original_joints -= midpoints[:, np.newaxis, :]
+            
+            midpoints = self.user_joints[:, self.midpoint_shoulder_idx]
+            self.user_joints -= midpoints[:, np.newaxis, :]
+    
+    def _compute_velocity(self, joints):
+        """Compute velocity between frames using gradient"""
+        return np.gradient(joints, axis=0)
+    
+    def cosine_similarity(self, vec1, vec2):
+        """Compute cosine similarity between two vectors"""
+        flat1 = vec1.flatten()
+        flat2 = vec2.flatten()
+        dot = np.dot(flat1, flat2)
+        norm = np.linalg.norm(flat1) * np.linalg.norm(flat2)
+        return dot / norm if norm > 1e-10 else 0
+    
+    def analyze_timing(self):
+        # Calculate total duration in seconds
+        total_seconds = len(self.original_joints) / self.fps
+        
+        # Generate analysis time points
+        analysis_times = np.arange(0, total_seconds, self.analysis_interval_sec)
+        
+        # Track last matched user frame to prevent backtracking
+        last_matched_user_idx = -1
+        
+        for time_point in analysis_times:
+            # Convert time to frame indices
+            orig_idx = min(int(time_point * self.fps), len(self.original_joints)-1)
+            original_pose = self.original_joints[orig_idx]
+            original_vel = self.original_velocity[orig_idx]
+            
+            # Calculate equivalent user frame index
+            user_idx_expected = min(int(time_point * self.fps), len(self.user_joints)-1)
+            
+            # Define search window boundaries
+            start_idx = max(0, user_idx_expected - self.window_radius_frames)
+            end_idx = min(len(self.user_joints), user_idx_expected + self.window_radius_frames + 1)
+            
+            # Prevent matching to same/earlier frames than previous matches
+            start_idx = max(start_idx, last_matched_user_idx + 1)
+            
+            # If no valid frames in window, skip this analysis point
+            if start_idx >= end_idx:
+                continue
+                
+            best_score = -np.inf
+            best_match_idx = None
+            
+            # Find best matching user frame using combined metrics
+            for u_idx in range(start_idx, end_idx):
+                user_pose = self.user_joints[u_idx]
+                user_vel = self.user_velocity[u_idx]
+                
+                # Calculate similarities
+                pose_sim = self.cosine_similarity(original_pose, user_pose)
+                vel_sim = self.cosine_similarity(original_vel, user_vel)
+                
+                # Combined score with weights
+                combined_score = (self.pose_weight * pose_sim + 
+                                 self.velocity_weight * vel_sim)
+                
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_match_idx = u_idx
+            
+            if best_match_idx is None:
+                continue
+                
+            # Update last matched index
+            last_matched_user_idx = best_match_idx
+                
+            # Calculate timing offset
+            frame_offset = best_match_idx - user_idx_expected
+            time_offset = frame_offset / self.fps
+            
+            self.results.append({
+                'analysis_time': f"{time_point:.1f}s",
+                'original_frame': self.original_frames[orig_idx],
+                'user_frame': self.user_frames[best_match_idx],
+                'frame_offset': frame_offset,
+                'time_offset_sec': time_offset,
+                'pose_similarity': pose_sim,
+                'velocity_similarity': vel_sim,
+                'combined_score': best_score
+            })
+    
+    def generate_report(self):
+        # Create pandas DataFrame for analysis
+        df = pd.DataFrame(self.results)
+        
+        # Classify timing status
+        df['status'] = np.select(
+            [
+                df['time_offset_sec'] > 0.15,    # Late
+                df['time_offset_sec'] < -0.15     # Early
+            ],
+            ['Late', 'Early'],
+            default='On time'
+        )
+        
+        # Generate detailed report
+        report = df[['analysis_time', 'original_frame', 'user_frame', 
+                     'frame_offset', 'time_offset_sec', 'status',
+                     'pose_similarity', 'velocity_similarity', 'combined_score']]
+        report.columns = ['Time', 'Original Frame', 'Matched User Frame', 
+                          'Frame Offset', 'Time Offset (s)', 'Status',
+                          'Pose Sim', 'Velocity Sim', 'Combined Score']
+        
+        # Add summary statistics
+        early_count = (df['status'] == 'Early').sum()
+        late_count = (df['status'] == 'Late').sum()
+        on_time_count = (df['status'] == 'On time').sum()
+        total_points = len(df)
+        
+        print(f"Timing Analysis Report ({self.analysis_interval_sec}s intervals):")
+        print(report.to_string(index=False, float_format="%.3f"))
+        
+        print("\nSummary Statistics:")
+        print(f"Analysis points: {total_points}")
+        print(f"Early points: {early_count} ({early_count/total_points*100:.1f}%)")
+        print(f"Late points: {late_count} ({late_count/total_points*100:.1f}%)")
+        print(f"On time points: {on_time_count} ({on_time_count/total_points*100:.1f}%)")
+        print(f"\nAverage Pose Similarity: {df['pose_similarity'].mean():.3f}")
+        print(f"Average Velocity Similarity: {df['velocity_similarity'].mean():.3f}")
+        
+        return report
+
+# Usage
+analyzer = DanceTimingAnalyzer(
+    json_path='dance2.json',  # Update to your actual file
+    fps=30,
+    window_radius_sec=0.5,
+    analysis_interval_sec=0.2,
+    pose_weight=0.6,      # Tune these weights based on dance style
+    velocity_weight=0.4    # Higher for dynamic dances
+)
+analyzer.load_data()
+analyzer.analyze_timing()
+report = analyzer.generate_report()
