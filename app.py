@@ -4,9 +4,12 @@ FastAPI application for dance analysis backend.
 This module provides the main API endpoints for pose comparison and analysis.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
+import json
+import tempfile
+import os
 
 from models import PoseData, FrameComparisonResult
 from compare import compare_all_frames, validate_pose_data, get_analysis_summary
@@ -34,7 +37,7 @@ async def root():
 
 
 @app.post("/compare-poses", response_model=List[FrameComparisonResult])
-async def compare_poses(pose_data: PoseData, difficulty: str = "intermediate"):
+async def compare_poses(pose_data: PoseData, difficulty: str = "intermediate", fps: float = 30.0):
     """
     Compare user poses with reference poses and return analysis results.
     
@@ -48,6 +51,7 @@ async def compare_poses(pose_data: PoseData, difficulty: str = "intermediate"):
     Args:
         pose_data: PoseData object containing original and user pose dictionaries
         difficulty: Difficulty level (beginner, intermediate, advanced)
+        fps: Frame rate for timestamp calculation (default: 30.0)
         
     Returns:
         List of FrameComparisonResult objects for the most problematic frames
@@ -70,9 +74,14 @@ async def compare_poses(pose_data: PoseData, difficulty: str = "intermediate"):
         # Perform pose comparison with difficulty level
         results = compare_all_frames(pose_data, difficulty)
         
+        # Add timestamps to results
+        from process_real_data import calculate_timestamp
+        for result in results:
+            result.timestamp = calculate_timestamp(result.frame_id, fps)
+        
         # Generate summary for logging/debugging
         summary = get_analysis_summary(results)
-        print(f"Analysis completed for {difficulty} level: {summary}")
+        print(f"Analysis completed for {difficulty} level with {fps} FPS: {summary}")
         
         return results
         
@@ -170,6 +179,85 @@ async def test_comparison(difficulty: str = "intermediate"):
         raise HTTPException(
             status_code=500,
             detail=f"Test comparison failed: {str(e)}"
+        )
+
+
+@app.post("/compare-two-files")
+async def compare_two_files(
+    original_file: UploadFile = File(...), 
+    cover_file: UploadFile = File(...),
+    difficulty: str = "intermediate",
+    fps: float = 30.0
+):
+    """
+    Compare two pose files and return analysis results.
+    
+    This endpoint:
+    1. Reads the uploaded files
+    2. Converts them to a single PoseData object
+    3. Compares the original vs cover poses
+    4. Returns detailed analysis with humanized suggestions including straighten/bend logic
+    
+    Args:
+        original_file: Uploaded file containing original pose data
+        cover_file: Uploaded file containing cover pose data
+        difficulty: Difficulty level (beginner, intermediate, advanced)
+        fps: Frame rate for timestamp calculation (default: 30.0)
+        
+    Returns:
+        Detailed analysis of the comparison results
+        
+    Raises:
+        HTTPException: If files are invalid or comparison fails
+    """
+    try:
+        # Read and parse both files
+        original_content = await original_file.read()
+        cover_content = await cover_file.read()
+        
+        # Parse JSON data
+        original_data = json.loads(original_content.decode())
+        cover_data = json.loads(cover_content.decode())
+        
+        # Create combined PoseData object
+        pose_data = PoseData(original=original_data, user=cover_data)
+        
+        # Validate input data
+        if not validate_pose_data(pose_data):
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid pose data: missing required keypoints for analysis"
+            )
+        
+        # Get difficulty configuration for logging
+        from config import config
+        difficulty_config = config.get_difficulty_config(difficulty)
+        
+        # Perform pose comparison with difficulty level
+        results = compare_all_frames(pose_data, difficulty)
+        
+        # Add timestamps to results
+        from process_real_data import calculate_timestamp
+        for result in results:
+            result.timestamp = calculate_timestamp(result.frame_id, fps)
+        
+        # Generate summary for logging/debugging
+        summary = get_analysis_summary(results)
+        print(f"Analysis completed for {difficulty} level with {fps} FPS: {summary}")
+        
+        return {
+            "difficulty": difficulty,
+            "difficulty_name": difficulty_config['name'],
+            "threshold": difficulty_config['angle_threshold'],
+            "fps": fps,
+            "results": results,
+            "summary": summary
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error during pose comparison: {str(e)}"
         )
 
 
