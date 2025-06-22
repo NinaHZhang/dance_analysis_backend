@@ -114,7 +114,7 @@ def _parse_inferred_json(data: Dict) -> PoseData:
     for key, value in data.items():
         if isinstance(value, dict):
             # Check if this looks like pose data
-            if any(kp in value for kp in ['right_shoulder', 'left_shoulder', 'nose']):
+            if any(kp in value for kp in ['right_shoulder', 'left_shoulder']):
                 if 'original' in key.lower() or 'reference' in key.lower():
                     original_frames[key] = _extract_keypoints(value)
                 elif 'user' in key.lower() or 'cover' in key.lower():
@@ -237,22 +237,62 @@ def select_difficulty_level() -> str:
             print("Invalid input. Please try again.")
 
 
+def select_fps() -> float:
+    """Interactive FPS selection."""
+    print("\n🎬 SELECT FRAME RATE (FPS)")
+    print("=" * 40)
+    print("Common frame rates:")
+    print("1. 24 FPS (Film)")
+    print("2. 30 FPS (Video)")
+    print("3. 60 FPS (High-speed)")
+    print("4. Custom FPS")
+    print()
+    
+    while True:
+        try:
+            choice = input("Enter your choice (1-4): ").strip()
+            if choice == "1":
+                return 24.0
+            elif choice == "2":
+                return 30.0
+            elif choice == "3":
+                return 60.0
+            elif choice == "4":
+                while True:
+                    try:
+                        custom_fps = float(input("Enter custom FPS (e.g., 25.0): ").strip())
+                        if custom_fps > 0:
+                            return custom_fps
+                        else:
+                            print("FPS must be greater than 0")
+                    except ValueError:
+                        print("Please enter a valid number")
+            else:
+                print("Please enter 1, 2, 3, or 4")
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            exit()
+        except:
+            print("Invalid input. Please try again.")
+
+
 def calculate_timestamp(frame_id: str, fps: float = 30.0) -> float:
     """Calculate timestamp from frame ID."""
     try:
         frame_num = int(frame_id.replace('frame_', ''))
-        return (frame_num - 1) / fps  # Assuming 30 FPS, adjust as needed
+        return (frame_num - 1) / fps
     except:
         return 0.0
 
 
-def process_pose_file(file_path: str, difficulty: str = "intermediate") -> Dict:
+def process_pose_file(file_path: str, difficulty: str = "intermediate", fps: float = 30.0) -> Dict:
     """
     Process a pose data file and return analysis results.
     
     Args:
         file_path: Path to the pose data file
         difficulty: Difficulty level for analysis
+        fps: Frame rate for timestamp calculation
     
     Returns:
         Dictionary with analysis results
@@ -282,12 +322,13 @@ def process_pose_file(file_path: str, difficulty: str = "intermediate") -> Dict:
         return {"error": "No valid pose data found"}
     
     # Run analysis
-    return run_analysis(pose_data, difficulty)
+    return run_analysis(pose_data, difficulty, fps)
 
 
-def run_analysis(pose_data: PoseData, difficulty: str = "intermediate") -> Dict:
+def run_analysis(pose_data: PoseData, difficulty: str = "intermediate", fps: float = 30.0) -> Dict:
     """Run dance analysis on pose data with difficulty-based thresholds."""
     print(f"🎭 Analyzing with {difficulty} difficulty...")
+    print(f"🎬 Using {fps} FPS for timestamp calculation")
     
     # Get difficulty configuration
     difficulty_config = config.get_difficulty_config(difficulty)
@@ -302,6 +343,7 @@ def run_analysis(pose_data: PoseData, difficulty: str = "intermediate") -> Dict:
         "difficulty": difficulty,
         "difficulty_name": difficulty_config['name'],
         "threshold": difficulty_config['angle_threshold'],
+        "fps": fps,
         "frames_analyzed": len(pose_data.original),
         "problematic_frames": len(results),
         "total_error": summary.get('total_error', 0),
@@ -312,7 +354,7 @@ def run_analysis(pose_data: PoseData, difficulty: str = "intermediate") -> Dict:
     for result in results:
         frame_result = {
             "frame_id": result.frame_id,
-            "timestamp": calculate_timestamp(result.frame_id),
+            "timestamp": calculate_timestamp(result.frame_id, fps),
             "score": result.total_error,
             "joint_issues": [
                 {
@@ -338,6 +380,7 @@ def print_analysis_results(results: Dict):
     print(f"\n📊 ANALYSIS RESULTS")
     print(f"   Difficulty: {results['difficulty_name']}")
     print(f"   Threshold: {results['threshold']}°")
+    print(f"   Frame Rate: {results.get('fps', 30.0)} FPS")
     print(f"   Frames Analyzed: {results['frames_analyzed']}")
     print(f"   Keyframes Found: {results['problematic_frames']}")
     
@@ -366,8 +409,11 @@ def main():
     # Look for pose data files in current directory
     pose_files = []
     for file in os.listdir('.'):
-        if file.endswith(('.json', '.csv')) and 'pose' in file.lower():
-            pose_files.append(file)
+        if file.endswith(('.json', '.csv')):
+            # Check for various dance/pose related keywords
+            file_lower = file.lower()
+            if any(keyword in file_lower for keyword in ['pose', 'dance', 'arm', 'nin', 'vertopal']):
+                pose_files.append(file)
     
     if not pose_files:
         print("📄 No pose data files found in current directory.")
@@ -385,13 +431,16 @@ def main():
     # Select difficulty level
     difficulty = select_difficulty_level()
     
+    # Select FPS
+    fps = select_fps()
+    
     # Process each file
     for file_path in pose_files:
         print(f"\n{'='*60}")
         print(f"Processing: {file_path}")
         print(f"{'='*60}")
         
-        results = process_pose_file(file_path, difficulty)
+        results = process_pose_file(file_path, difficulty, fps)
         print_analysis_results(results)
 
 

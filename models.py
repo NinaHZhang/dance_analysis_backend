@@ -43,8 +43,10 @@ class FrameComparisonResult(BaseModel):
         total_error: Sum of all joint angle differences for this frame
         joint_issues: List of specific joint issues found in this frame
         suggestions: List of human-readable suggestions for improvement
+        timestamp: Timestamp in seconds for this frame (calculated from FPS)
     """
     frame_id: str
     total_error: float
     joint_issues: List[JointIssue]
-    suggestions: List[str] 
+    suggestions: List[str]
+    timestamp: Optional[float] = None 

@@ -139,6 +139,7 @@ def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]],
     # Get difficulty-based threshold
     difficulty_config = config.get_difficulty_config(difficulty_level)
     threshold = difficulty_config["angle_threshold"]
+    leg_threshold = difficulty_config.get("leg_angle_threshold", threshold)  # Use leg-specific threshold if available
     
     # Get arm straightness thresholds
     straight_threshold = config.STRAIGHT_THRESHOLD
@@ -156,11 +157,21 @@ def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]],
         # Calculate angle difference
         delta_angle = user_angle - original_angle
         
+        # Use joint-specific thresholds
+        if joint_name in ["right_leg", "left_leg"]:
+            current_threshold = leg_threshold
+        elif joint_name in ["torso", "torso_alt"]:
+            current_threshold = difficulty_config.get("torso_angle_threshold", threshold)
+        elif joint_name in ["right_knee", "left_knee"]:
+            current_threshold = leg_threshold  # Use leg threshold for knees
+        else:
+            current_threshold = threshold
+        
         # Only include if difference exceeds threshold
-        if abs(delta_angle) > threshold:
+        if abs(delta_angle) > current_threshold:
             # Generate humanized suggestion with straighten/bend logic
             suggestion = _generate_humanized_suggestion_with_straighten_bend(
-                joint_name, original_angle, user_angle, delta_angle, difficulty_level
+                joint_name, original_angle, user_angle, delta_angle, difficulty_level, original_pose, user_pose
             )
             
             joint_issue = JointIssue(
@@ -170,6 +181,19 @@ def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]],
             )
             joint_issues.append(joint_issue)
             total_error += abs(delta_angle)
+        
+        # Add posture detection using hip-to-shoulder Y delta
+        if joint_name in ["torso", "torso_alt"] and original_pose and user_pose:
+            posture_suggestion = _detect_lowered_posture(original_pose, user_pose, joint_name)
+            if posture_suggestion:
+                # Add posture issue separately
+                posture_issue = JointIssue(
+                    joint=f"{joint_name}_posture",
+                    delta_angle=0.0,  # Not angle-based
+                    suggestion=posture_suggestion
+                )
+                joint_issues.append(posture_issue)
+                total_error += 5.0  # Small penalty for posture issues
     
     # Only return result if there are significant issues
     if joint_issues:
@@ -184,58 +208,183 @@ def compare_frame_poses(original_pose: Dict[str, Tuple[float, float]],
     return None
 
 
-def _generate_humanized_suggestion_with_straighten_bend(joint_name, ref_angle, user_angle, difference, difficulty_level):
+def _detect_lowered_posture(original_pose, user_pose, joint_name):
     """
-    Generate humanized suggestions based on angle differences, including straighten/bend logic.
-    """
-    import random
-    from config import config
+    Detect if user has lowered posture compared to reference using hip-to-shoulder Y delta.
     
+    Args:
+        original_pose: Reference pose keypoints
+        user_pose: User pose keypoints
+        joint_name: Joint name (torso or torso_alt)
+        
+    Returns:
+        Posture suggestion string or None
+    """
+    # Determine which side to use based on joint_name
+    if joint_name == "torso":
+        shoulder_key = "left_shoulder"
+        hip_key = "left_hip"
+    else:  # torso_alt
+        shoulder_key = "right_shoulder"
+        hip_key = "right_hip"
+    
+    # Calculate hip-to-shoulder Y distance (lower values = lower posture)
+    orig_shoulder_y = original_pose[shoulder_key][1]
+    orig_hip_y = original_pose[hip_key][1]
+    user_shoulder_y = user_pose[shoulder_key][1]
+    user_hip_y = user_pose[hip_key][1]
+    
+    # Calculate relative distances (with 0,0 at bottom-left)
+    orig_delta = orig_shoulder_y - orig_hip_y  # Positive if shoulder above hip
+    user_delta = user_shoulder_y - user_hip_y  # Positive if shoulder above hip
+    
+    # Tolerance for small differences
+    threshold = 0.03
+    
+    if user_delta < orig_delta - threshold:
+        # User's posture is lower than reference
+        return "Lower your center of gravity more"
+    elif user_delta > orig_delta + threshold:
+        # User's posture is higher than reference
+        return "Raise your center of gravity more"
+    
+    return None
+
+
+def _generate_humanized_suggestion_with_straighten_bend(joint_name, ref_angle, user_angle, difference, difficulty_level, original_pose=None, user_pose=None):
+    """
+    Generate humanized suggestions based on angle differences, including straighten/bend logic and position-based feedback.
+    
+    MOVEMENT TYPE CLASSIFICATION:
+    ============================
+    
+    1. VERTICAL LIMB HEIGHT (arms, legs, head)
+       - Use: Relative Y-delta to parent joint (e.g., wrist-to-shoulder, ankle-to-hip)
+       - Purpose: Detect if limb is too high/low relative to body
+       - Example: "Raise your left arm" when wrist is below shoulder level
+       - Scope: Arms, legs, head (NOT torso, hips, or diagonal movement)
+    
+    2. BENDING/EXTENDING (all joints)
+       - Use: Angle-based comparison using three joints
+       - Purpose: Detect if joint is too bent or too straight
+       - Example: "Straighten your right arm" when elbow is bent
+       - Scope: All joints with angle calculations
+    
+    3. HORIZONTAL MOVEMENT (arms, legs, torso)
+       - Use: X-coordinate comparison relative to body centerline
+       - Purpose: Detect if limb is too far left/right
+       - Example: "Move your right arm more to the right"
+       - Scope: Arms, legs, torso (requires body centerline reference)
+    
+    4. FULL-BODY FLOW/BALANCE (torso, hips)
+       - Use: Left/right symmetry analysis or sequence timing
+       - Purpose: Detect posture, balance, or flow issues
+       - Example: "Straighten your posture" or "Shift weight to left leg"
+       - Scope: Torso, hips, overall body positioning
+    
+    CURRENT IMPLEMENTATION:
+    =======================
+    - Arms: Uses wrist-to-shoulder Y-delta for vertical height + angle for straight/bent
+    - Legs: Uses angle-based feedback only (ankle-to-hip Y-delta not yet implemented)
+    - Torso: Uses angle-based feedback only
+    - Other joints: Fallback to angle-based positive/negative suggestions
+    
+    LIMITATIONS:
+    ============
+    - Wrist-to-shoulder method is ONLY for vertical arm height detection
+    - Do NOT use for torso, hips, or diagonal limb movement without modification
+    - Horizontal movement detection not yet implemented
+    - Full-body balance analysis not yet implemented
+    """
+    from config import config
     templates = config.SUGGESTION_TEMPLATES
     straight_threshold = config.STRAIGHT_THRESHOLD
     bent_threshold = config.BENT_THRESHOLD
-    
-    # Determine if this is an arm joint
+
     is_arm = joint_name in ["right_arm", "left_arm"]
-    
-    if is_arm:
-        # Check if reference pose expects a straight arm
+    is_knee = joint_name in ["right_knee", "left_knee"]
+
+    if (is_arm or is_knee) and original_pose and user_pose:
+        # Check if reference pose expects a straight arm/knee
         ref_is_straight = ref_angle > straight_threshold
         user_is_straight = user_angle > straight_threshold
-        
-        # Check if reference pose expects a bent arm
+        # Check if reference pose expects a bent arm/knee
         ref_is_bent = ref_angle < bent_threshold
         user_is_bent = user_angle < bent_threshold
-        
-        # Case 1: Reference expects straight arm, user has bent arm
+
+        # Case 1: Reference expects straight arm/knee, user has bent arm/knee
         if ref_is_straight and not user_is_straight:
             if joint_name in templates and "straighten" in templates[joint_name]:
-                return random.choice(templates[joint_name]["straighten"])
-        
-        # Case 2: Reference expects bent arm, user has straight arm
+                return templates[joint_name]["straighten"][0]
+        # Case 2: Reference expects bent arm/knee, user has straight arm/knee
         elif ref_is_bent and not user_is_bent:
             if joint_name in templates and "bend" in templates[joint_name]:
-                return random.choice(templates[joint_name]["bend"])
-        
-        # Case 3: Both are straight or both are bent, but angles differ
-        elif (ref_is_straight and user_is_straight) or (ref_is_bent and user_is_bent):
-            # Use regular positive/negative logic
-            if user_angle < ref_angle:
-                if joint_name in templates and "positive" in templates[joint_name]:
-                    return random.choice(templates[joint_name]["positive"])
-            else:
+                return templates[joint_name]["bend"][0]
+        # Case 3: Both are straight, but angles differ (for arms only - use relative wrist-to-shoulder position)
+        elif ref_is_straight and user_is_straight and is_arm:
+            # VERTICAL LIMB HEIGHT DETECTION (arms only)
+            # Use relative wrist-to-shoulder Y distance for raise/lower (more robust to camera distance)
+            # Coordinate system: (0,0) = bottom-left, (1,1) = top-right
+            wrist_key = "right_wrist" if joint_name == "right_arm" else "left_wrist"
+            shoulder_key = "right_shoulder" if joint_name == "right_arm" else "left_shoulder"
+            
+            # Calculate relative distances from shoulder to wrist
+            orig_shoulder_y = original_pose[shoulder_key][1]
+            orig_wrist_y = original_pose[wrist_key][1]
+            user_shoulder_y = user_pose[shoulder_key][1]
+            user_wrist_y = user_pose[wrist_key][1]
+            
+            # With (0,0) at bottom-left, wrist_y - shoulder_y gives positive value when wrist is above shoulder
+            orig_delta = orig_wrist_y - orig_shoulder_y  # Positive if wrist is above shoulder
+            user_delta = user_wrist_y - user_shoulder_y  # Positive if wrist is above shoulder
+            
+            # Tolerance for small differences (0.02 in normalized coordinates)
+            threshold = 0.02
+            
+            # Debug output to verify correctness
+            print(f"[DEBUG][{joint_name}] user_delta={user_delta:.3f}, orig_delta={orig_delta:.3f}, diff={user_delta - orig_delta:.3f}")
+            
+            if user_delta < orig_delta - threshold:
+                # User's wrist is relatively lower than original's (user should raise)
                 if joint_name in templates and "negative" in templates[joint_name]:
-                    return random.choice(templates[joint_name]["negative"])
-    
+                    return templates[joint_name]["negative"][0]  # "Raise your arm"
+            elif user_delta > orig_delta + threshold:
+                # User's wrist is relatively higher than original's (user should lower)
+                if joint_name in templates and "positive" in templates[joint_name]:
+                    return templates[joint_name]["positive"][0]  # "Lower your arm"
+            # If within tolerance, don't suggest height adjustment
+        # Case 4: Both are bent, but angles differ (fallback to angle logic)
+        elif ref_is_bent and user_is_bent:
+            # If there's a significant difference in bend angles, provide specific feedback
+            angle_diff = abs(user_angle - ref_angle)
+            if angle_diff > 30:  # Significant difference threshold
+                if user_angle > ref_angle:
+                    # User's arm/knee is more extended than reference - suggest bending more
+                    if joint_name in templates and "bend" in templates[joint_name]:
+                        return templates[joint_name]["bend"][0]
+                else:
+                    # User's arm/knee is more bent than reference - suggest straightening more
+                    if joint_name in templates and "straighten" in templates[joint_name]:
+                        return templates[joint_name]["straighten"][0]
+            else:
+                # Smaller difference - use generic logic
+                if user_angle < ref_angle:
+                    if joint_name in templates and "positive" in templates[joint_name]:
+                        return templates[joint_name]["positive"][0]
+                else:
+                    if joint_name in templates and "negative" in templates[joint_name]:
+                        return templates[joint_name]["negative"][0]
     # For non-arm joints or when straight/bend logic doesn't apply
+    # TODO: Implement similar vertical height detection for legs (ankle-to-hip)
+    # TODO: Implement horizontal movement detection for arms/legs
+    # TODO: Implement full-body balance analysis for torso/hips
     if joint_name in templates:
         if user_angle < ref_angle:
             if "positive" in templates[joint_name]:
-                return random.choice(templates[joint_name]["positive"])
+                return templates[joint_name]["positive"][0]
         else:
             if "negative" in templates[joint_name]:
-                return random.choice(templates[joint_name]["negative"])
-    
+                return templates[joint_name]["negative"][0]
     return None
 
 
